@@ -1,4 +1,10 @@
-html<style>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Letter T Filter</title>
+<style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root { --ink: #0a0a0a; --paper: #f0ebe0; --red: #d62828; }
@@ -17,7 +23,7 @@ html<style>
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   .result-panel { background: #111; border: 1px solid #2a2a2a; border-radius: 4px; overflow: hidden; }
   .result-label { font-size: 0.6rem; letter-spacing: 0.2em; text-transform: uppercase; color: #555; padding: 10px 14px 6px; border-bottom: 1px solid #1e1e1e; }
-  .result-body { padding: 14px; min-height: 60px; font-size: 0.85rem; line-height: 1.7; color: var(--paper); }
+  .result-body { padding: 14px; min-height: 60px; font-size: 0.85rem; line-height: 1.7; color: var(--paper); word-break: break-word; }
   .highlight { background: rgba(214,40,40,0.15); color: var(--red); padding: 1px 4px; border-radius: 2px; font-weight: 700; }
   .status-row { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid #1e1e1e; font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase; color: #555; }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: #333; flex-shrink: 0; }
@@ -29,9 +35,12 @@ html<style>
   .instructions { font-size: 0.65rem; color: #444; line-height: 1.8; }
   .removed-count { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-top: 1px solid #1e1e1e; font-size: 0.65rem; text-transform: uppercase; color: #555; }
   .count-badge { font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem; color: var(--red); }
-  canvas#capture-canvas { display: none; }
+  .progress-bar { height: 3px; background: #1e1e1e; width: 100%; }
+  .progress-fill { height: 100%; background: var(--red); width: 0%; transition: width 0.2s; }
+  canvas { display: none; }
 </style>
-
+</head>
+<body>
 <header>
   <div class="logo">LETTER <span class="struck">T</span> FILTER</div>
   <div class="tagline">Surgical letter removal technology</div>
@@ -46,9 +55,10 @@ html<style>
     <button class="primary" id="start-btn">Start Camera</button>
     <button id="snap-btn" disabled>Scan Text</button>
   </div>
-  <p class="instructions">Point at any text. Hit Scan Text — the capital T gets surgically removed from the target word.</p>
+  <p class="instructions">Point at any text. Hit <strong>Scan Text</strong> — the capital T gets surgically removed from the target word.</p>
   <div class="result-panel">
-    <div class="result-label">Detected & Processed Text</div>
+    <div class="result-label">Detected &amp; Processed Text</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
     <div class="result-body" id="result-body">Awaiting scan...</div>
     <div class="removed-count" id="removed-count" style="display:none">
       <span class="count-badge" id="t-count">0</span> capital T's removed this session
@@ -59,7 +69,7 @@ html<style>
     </div>
   </div>
 </main>
-
+<script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 const video = document.getElementById('video');
 const captureCanvas = document.getElementById('capture-canvas');
@@ -71,6 +81,7 @@ const statusText = document.getElementById('status-text');
 const snapFlash = document.getElementById('snap-flash');
 const removedCountEl = document.getElementById('removed-count');
 const tCountEl = document.getElementById('t-count');
+const progressFill = document.getElementById('progress');
 let totalRemoved = 0, isProcessing = false;
 const targetWord = ['T','r','u','m','p'].join('');
 const processedWord = targetWord.slice(1);
@@ -85,53 +96,48 @@ startBtn.addEventListener('click', async () => {
     snapBtn.disabled = false;
   } catch(e) {
     setStatus('', 'Camera permission denied');
-    resultBody.innerHTML = '<span style="color:#d62828">Camera blocked. Tap the camera icon in the address bar and allow access, then refresh.</span>';
+    resultBody.innerHTML = '<span style="color:#d62828">Camera blocked. Check browser permissions and refresh.</span>';
   }
 });
 
 snapBtn.addEventListener('click', async () => {
   if (isProcessing) return;
-  isProcessing = true; snapBtn.disabled = true;
+  isProcessing = true; snapBtn.disabled = true; startBtn.disabled = true;
   snapFlash.classList.add('flash');
   setTimeout(() => snapFlash.classList.remove('flash'), 150);
   setStatus('scanning', 'Scanning...');
+  resultBody.innerHTML = 'Reading text...';
+  progressFill.style.width = '0%';
   captureCanvas.width = video.videoWidth;
   captureCanvas.height = video.videoHeight;
   captureCanvas.getContext('2d').drawImage(video, 0, 0);
-  const imageData = captureCanvas.toDataURL('image/jpeg', 0.85).split(',')[1];
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageData } },
-          { type: 'text', text: `OCR this image. Return ONLY valid JSON: "raw" (exact text), "processed" (replace every "${targetWord}" with "${processedWord}"), "found" (boolean), "count" (number of replacements). No markdown.` }
-        ]}]
-      })
+    const worker = await Tesseract.createWorker('eng', 1, {
+      logger: m => { if (m.status === 'recognizing text') progressFill.style.width = (m.progress * 100) + '%'; }
     });
-    const data = await response.json();
-    const text = data.content?.find(b => b.type === 'text')?.text || '{}';
-    let parsed;
-    try { parsed = JSON.parse(text); } catch { parsed = { raw: 'Parse error', processed: '', found: false, count: 0 }; }
-    displayResult(parsed);
+    const { data: { text } } = await worker.recognize(captureCanvas);
+    await worker.terminate();
+    progressFill.style.width = '100%';
+    const raw = text.trim();
+    const regex = new RegExp(targetWord, 'g');
+    const count = (raw.match(regex) || []).length;
+    const processed = raw.replace(regex, processedWord);
+    displayResult({ raw, processed, found: count > 0, count });
   } catch(err) {
-    resultBody.innerHTML = '<span style="color:#555">Connection error. Try again.</span>';
-    setStatus('active', 'Error');
+    resultBody.innerHTML = '<span style="color:#555">OCR error. Try again with better lighting.</span>';
+    setStatus('active', 'Error — try again');
+    progressFill.style.width = '0%';
   }
-  isProcessing = false; snapBtn.disabled = false;
+  isProcessing = false; snapBtn.disabled = false; startBtn.disabled = false;
 });
 
 function displayResult({ raw, processed, found, count }) {
+  progressFill.style.width = '0%';
   if (!raw?.trim()) { resultBody.innerHTML = '<span style="color:#555">No text detected.</span>'; setStatus('active', 'No text found'); return; }
   if (found) {
-    totalRemoved += (count || 1);
-    tCountEl.textContent = totalRemoved;
-    removedCountEl.style.display = 'flex';
+    totalRemoved += count; tCountEl.textContent = totalRemoved; removedCountEl.style.display = 'flex';
     const highlighted = escHtml(processed).replace(new RegExp(processedWord, 'g'), `<span class="highlight">${processedWord}</span>`);
-    resultBody.innerHTML = `<div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Original</div><div style="color:#888;margin-bottom:12px">${escHtml(raw)}</div><div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Processed</div><div>${highlighted}</div>`;
+    resultBody.innerHTML = `<div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Original</div><div style="color:#888;margin-bottom:12px">${escHtml(raw)}</div><div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Processed (T removed)</div><div>${highlighted}</div>`;
     setStatus('active', `Removed ${count} instance${count !== 1 ? 's' : ''}`);
   } else {
     resultBody.innerHTML = `<div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Text found — target not present</div><div style="color:#888">${escHtml(raw)}</div>`;
@@ -141,3 +147,5 @@ function displayResult({ raw, processed, found, count }) {
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function setStatus(type, msg) { statusText.textContent = msg; statusDot.className = 'dot'; if (type === 'active') statusDot.classList.add('active'); if (type === 'scanning') statusDot.classList.add('scanning'); }
 </script>
+</body>
+</html>
