@@ -84,7 +84,17 @@ const tCountEl = document.getElementById('t-count');
 const progressFill = document.getElementById('progress');
 let totalRemoved = 0, isProcessing = false;
 const targetWord = ['T','r','u','m','p'].join('');
-const processedWord = targetWord.slice(1);
+
+function processText(raw) {
+  // Match Trump, TRUMP, or partials like RUMP that lost the T
+  const fullRegex = new RegExp(targetWord, 'gi');
+  let processed = raw.replace(fullRegex, (match) => {
+    if (match === match.toUpperCase()) return 'RUMP';
+    return 'rump';
+  });
+  const count = (raw.match(fullRegex) || []).length;
+  return { processed, count };
+}
 
 startBtn.addEventListener('click', async () => {
   try {
@@ -119,15 +129,11 @@ snapBtn.addEventListener('click', async () => {
     await worker.terminate();
     progressFill.style.width = '100%';
     const raw = text.trim();
-    const regex = new RegExp(targetWord, 'gi');
-    const count = (raw.match(regex) || []).length;
-    const processed = raw.replace(regex, (match) => {
-  if (match === match.toUpperCase()) return processedWord.toUpperCase();
-  return processedWord;
-});
-    displayResult({ raw, processed, found: count > 0, count });
+    const { processed, count } = processText(raw);
+    const found = count > 0;
+    displayResult({ raw, processed, found, count });
   } catch(err) {
-    resultBody.innerHTML = '<span style="color:#555">OCR error. Try again with better lighting.</span>';
+    resultBody.innerHTML = '<span style="color:#555">OCR error. Try again.</span>';
     setStatus('active', 'Error — try again');
     progressFill.style.width = '0%';
   }
@@ -139,12 +145,12 @@ function displayResult({ raw, processed, found, count }) {
   if (!raw?.trim()) { resultBody.innerHTML = '<span style="color:#555">No text detected.</span>'; setStatus('active', 'No text found'); return; }
   if (found) {
     totalRemoved += count; tCountEl.textContent = totalRemoved; removedCountEl.style.display = 'flex';
-    const highlighted = escHtml(processed).replace(new RegExp(processedWord, 'g'), `<span class="highlight">${processedWord}</span>`);
+    const highlighted = escHtml(processed).replace(/RUMP|rump/g, `<span class="highlight">$&</span>`);
     resultBody.innerHTML = `<div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Original</div><div style="color:#888;margin-bottom:12px">${escHtml(raw)}</div><div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Processed (T removed)</div><div>${highlighted}</div>`;
     setStatus('active', `Removed ${count} instance${count !== 1 ? 's' : ''}`);
   } else {
     resultBody.innerHTML = `<div style="color:#555;font-size:0.65rem;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.1em">Text found — target not present</div><div style="color:#888">${escHtml(raw)}</div>`;
-    setStatus('active', 'Target not found');
+    setStatus('active', 'Target not found — try clearer text');
   }
 }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
