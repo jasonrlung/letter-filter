@@ -119,9 +119,12 @@ snapBtn.addEventListener('click', async () => {
     await worker.terminate();
     progressFill.style.width = '100%';
     const raw = text.trim();
-    const regex = new RegExp(targetWord, 'g');
+    const regex = new RegExp(targetWord, 'gi');
     const count = (raw.match(regex) || []).length;
-    const processed = raw.replace(regex, processedWord);
+    const processed = raw.replace(regex, (match) => {
+  if (match === match.toUpperCase()) return processedWord.toUpperCase();
+  return processedWord;
+});
     displayResult({ raw, processed, found: count > 0, count });
   } catch(err) {
     resultBody.innerHTML = '<span style="color:#555">OCR error. Try again with better lighting.</span>';
